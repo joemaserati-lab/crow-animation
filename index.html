@@ -1,29 +1,45 @@
 <!doctype html>
 <html lang="it">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Crow Scroll Animation</title>
-    <link rel="stylesheet" href="styles.css">
-  </head>
-  <body>
-    <main>
-      <section id="scrubSection" class="scrub-section" aria-label="Video controllato dallo scroll">
-        <div class="scroll-stage">
-          <video
-            id="scrollVideo"
-            class="scroll-video"
-            src="crow-threshold-scrub.mp4"
-            muted
-            playsinline
-            preload="auto"
-          ></video>
-          <div class="frame-overlay black-frame" aria-hidden="true"></div>
-          <div class="frame-overlay white-frame" aria-hidden="true"></div>
-        </div>
-      </section>
-    </main>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Crow Scroll Animation – Canvas Edition</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app" aria-label="Animazione controllata dallo scroll">
+    <section class="scrub-stage" id="scrubStage">
+      <canvas id="frameCanvas" class="frame-canvas" aria-hidden="true"></canvas>
 
-    <script src="script.js"></script>
-  </body>
+      <video
+        id="scrollVideoFallback"
+        class="scroll-video-fallback"
+        src="crow-threshold-scrub.mp4"
+        muted
+        playsinline
+        preload="auto"
+        aria-hidden="true"
+      ></video>
+
+      <div class="depth-layer" aria-hidden="true"></div>
+      <div class="frame-overlay black-frame" aria-hidden="true"></div>
+      <div class="frame-overlay white-frame" aria-hidden="true"></div>
+      <div class="film-grain" aria-hidden="true"></div>
+      <div class="vignette" aria-hidden="true"></div>
+
+      <div class="loader" id="loader" aria-live="polite">
+        <span id="loaderText">Caricamento frame</span>
+      </div>
+
+      <div class="scroll-ui" aria-hidden="true">
+        <div class="progress-track">
+          <span id="progressBar" class="progress-bar"></span>
+        </div>
+        <span class="scroll-hint">Scroll</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
 </html>
