@@ -15,6 +15,8 @@
   --depth-y: 0px;
   --grain-opacity: .05;
   --ui-opacity: 1;
+  --mobile-vh: 100vh;
+  --mobile-scroll-height: 620vh;
 }
 
 html,
@@ -58,6 +60,11 @@ html.is-native-scroll body {
   background: #000;
 }
 
+html.is-native-scroll .app,
+html.is-native-scroll .scrub-stage {
+  height: var(--mobile-vh);
+}
+
 .mobile-scroll-spacer {
   display: none;
 }
@@ -65,7 +72,7 @@ html.is-native-scroll body {
 html.is-native-scroll .mobile-scroll-spacer {
   display: block;
   width: 1px;
-  height: 620dvh;
+  height: var(--mobile-scroll-height);
   pointer-events: none;
 }
 

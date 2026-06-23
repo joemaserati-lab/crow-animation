@@ -69,6 +69,9 @@
   let resizeRaf = null;
   let lastTouchY = 0;
   let lastTouchTs = 0;
+  let stableViewportWidth = window.innerWidth;
+  let stableViewportHeight = window.innerHeight;
+  let stableMaxScroll = 0;
 
   const clamp = (value, min = 0, max = 1) => Math.min(Math.max(value, min), max);
   const mix = (a, b, t) => a + (b - a) * t;
@@ -102,11 +105,20 @@
     startLoop();
   }
 
+  function applyStableMobileViewport() {
+    if (!isNativeScroll) return;
+
+    stableViewportWidth = window.innerWidth;
+    stableViewportHeight = window.innerHeight;
+    stableMaxScroll = stableViewportHeight * 5.2;
+
+    root.style.setProperty('--mobile-vh', `${stableViewportHeight}px`);
+    root.style.setProperty('--mobile-scroll-height', `${stableViewportHeight * 6.2}px`);
+  }
+
   function getNativeScrollProgress() {
-    const scrollElement = document.scrollingElement || document.documentElement;
-    const maxScroll = scrollElement.scrollHeight - window.innerHeight;
-    if (maxScroll <= 0) return targetProgress;
-    return clamp(scrollElement.scrollTop / maxScroll);
+    if (stableMaxScroll <= 0) return targetProgress;
+    return clamp(window.scrollY / stableMaxScroll);
   }
 
   function onNativeScroll() {
@@ -255,13 +267,14 @@
   function resizeCanvas() {
     const dpr = Math.min(window.devicePixelRatio || 1, config.maxDevicePixelRatio);
     const width = Math.ceil(window.innerWidth * dpr);
-    const height = Math.ceil(window.innerHeight * dpr);
+    const viewportHeight = isNativeScroll ? stableViewportHeight : window.innerHeight;
+    const height = Math.ceil(viewportHeight * dpr);
 
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
       canvas.style.width = `${window.innerWidth}px`;
-      canvas.style.height = `${window.innerHeight}px`;
+      canvas.style.height = `${viewportHeight}px`;
       if (gl) gl.viewport(0, 0, width, height);
       lastRenderedFrame = -1;
       drawFrameForProgress(progress, true);
@@ -542,8 +555,14 @@
   function initEvents() {
     if (isNativeScroll) {
       const syncNativeViewport = () => {
+        if (window.innerWidth === stableViewportWidth) {
+          setProgress(getNativeScrollProgress());
+          return;
+        }
+
         cancelAnimationFrame(resizeRaf);
         resizeRaf = requestAnimationFrame(() => {
+          applyStableMobileViewport();
           resizeCanvas();
           setProgress(getNativeScrollProgress());
         });
@@ -554,7 +573,9 @@
       window.addEventListener('orientationchange', () => setTimeout(syncNativeViewport, 250));
 
       if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', syncNativeViewport);
+        window.visualViewport.addEventListener('resize', () => {
+          if (window.innerWidth !== stableViewportWidth) syncNativeViewport();
+        });
       }
 
       return;
@@ -575,6 +596,7 @@
 
   async function init() {
     if (isNativeScroll) {
+      applyStableMobileViewport();
       targetProgress = getNativeScrollProgress();
       progress = targetProgress;
     }
