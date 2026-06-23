@@ -1,0 +1,61 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --black-opacity: 1;
+  --white-opacity: 0;
+}
+
+html {
+  background: #000;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: #000;
+  overflow-x: hidden;
+}
+
+.scrub-section {
+  min-height: 520vh;
+}
+
+.scroll-stage {
+  position: sticky;
+  top: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+}
+
+.scroll-video,
+.frame-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+}
+
+.scroll-video {
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.frame-overlay {
+  z-index: 2;
+  pointer-events: none;
+}
+
+.black-frame {
+  background: #000;
+  opacity: var(--black-opacity);
+}
+
+.white-frame {
+  background: #fff;
+  opacity: var(--white-opacity);
+}

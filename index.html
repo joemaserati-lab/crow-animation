@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Crow Scroll Animation</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main>
+      <section id="scrubSection" class="scrub-section" aria-label="Video controllato dallo scroll">
+        <div class="scroll-stage">
+          <video
+            id="scrollVideo"
+            class="scroll-video"
+            src="crow-threshold-scrub.mp4"
+            muted
+            playsinline
+            preload="auto"
+          ></video>
+          <div class="frame-overlay black-frame" aria-hidden="true"></div>
+          <div class="frame-overlay white-frame" aria-hidden="true"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
