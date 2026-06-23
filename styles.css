@@ -27,10 +27,23 @@ body {
   overscroll-behavior: none;
 }
 
+html.is-native-scroll,
+html.is-native-scroll body {
+  height: auto;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #fff;
   touch-action: none;
+}
+
+html.is-native-scroll body {
+  touch-action: pan-y;
 }
 
 .app,
@@ -38,9 +51,22 @@ body {
   position: fixed;
   inset: 0;
   width: 100vw;
+  height: 100vh;
   height: 100svh;
+  height: 100dvh;
   overflow: hidden;
   background: #000;
+}
+
+.mobile-scroll-spacer {
+  display: none;
+}
+
+html.is-native-scroll .mobile-scroll-spacer {
+  display: block;
+  width: 1px;
+  height: 620dvh;
+  pointer-events: none;
 }
 
 .frame-canvas,
@@ -202,8 +228,18 @@ body.is-ready .loader {
 }
 
 @media (max-width: 767px) {
-  .film-grain { opacity: .045; }
-  .vignette { opacity: .30; }
+  .scroll-ui {
+    bottom: max(18px, env(safe-area-inset-bottom));
+    width: min(190px, calc(100vw - 64px));
+  }
+
+  .scroll-hint {
+    margin-top: 8px;
+    font-size: 10px;
+  }
+
+  .film-grain { opacity: .035; }
+  .vignette { opacity: .26; }
 }
 
 @media (prefers-reduced-motion: reduce) {

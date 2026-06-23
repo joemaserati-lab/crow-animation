@@ -4,24 +4,39 @@
   const root = document.documentElement;
   const body = document.body;
   const loaderText = document.querySelector('#loaderText');
+  const mobileQuery = window.matchMedia('(pointer: coarse), (max-width: 767px)');
+  const isNativeScroll = mobileQuery.matches;
+
+  if (isNativeScroll) {
+    root.classList.add('is-native-scroll');
+    body.classList.add('is-native-scroll');
+  }
 
   const config = {
-    manifestPath: 'frames/manifest.json',
+    manifestPath: isNativeScroll ? 'frames-mobile/manifest.json' : 'frames/manifest.json',
     wheelSensitivity: 0.00018,
     touchSensitivity: 0.00042,
     keyboardImpulse: 0.018,
     introRatio: 0.075,
     outroRatio: 0.085,
-    baseSmoothing: 0.075,
-    fastSmoothing: 0.19,
-    maxDevicePixelRatio: 2,
-    preloadConcurrency: 8,
-    initialPreloadRatio: 0.28,
-    lookAheadFrames: 18,
+    baseSmoothing: isNativeScroll ? 0.11 : 0.075,
+    fastSmoothing: isNativeScroll ? 0.24 : 0.19,
+    maxDevicePixelRatio: isNativeScroll ? 1.5 : 2,
+    preloadConcurrency: isNativeScroll ? 6 : 8,
+    initialPreloadRatio: isNativeScroll ? 0.34 : 0.28,
+    lookAheadFrames: isNativeScroll ? 14 : 18,
     fallbackMinSeekDelta: 0.004,
-    friction: 0.90,
+    friction: isNativeScroll ? 0.86 : 0.90,
     velocityClamp: 0.07,
     settleThreshold: 0.00035,
+    zoomAmount: isNativeScroll ? 0.105 : 0.18,
+    zoomExtra: isNativeScroll ? 0.018 : 0.035,
+    panXAmount: isNativeScroll ? -15 : -28,
+    panYAmount: isNativeScroll ? -10 : -18,
+    depthXAmount: isNativeScroll ? 12 : 24,
+    depthYAmount: isNativeScroll ? 8 : 16,
+    depthMax: isNativeScroll ? 0.44 : 0.72,
+    grainMax: isNativeScroll ? 0.052 : 0.085,
   };
 
   let gl = null;
@@ -87,6 +102,17 @@
     startLoop();
   }
 
+  function getNativeScrollProgress() {
+    const scrollElement = document.scrollingElement || document.documentElement;
+    const maxScroll = scrollElement.scrollHeight - window.innerHeight;
+    if (maxScroll <= 0) return targetProgress;
+    return clamp(scrollElement.scrollTop / maxScroll);
+  }
+
+  function onNativeScroll() {
+    setProgress(getNativeScrollProgress());
+  }
+
   function mapToContentProgress(p) {
     const start = config.introRatio;
     const end = 1 - config.outroRatio;
@@ -106,13 +132,13 @@
     const eased = easeInOutCubic(contentP);
     const timelineP = mapTimeline(contentP);
 
-    const zoom = 1 + easeOutExpo(contentP) * 0.18 + smoothstep(0.68, 0.9, contentP) * 0.035;
-    const panX = (eased - 0.5) * -28;
-    const panY = (timelineP - 0.5) * -18;
-    const depthOpacity = mix(0.18, 0.72, smoothstep(0.08, 0.82, contentP));
-    const depthX = (eased - 0.5) * 24;
-    const depthY = (timelineP - 0.5) * 16;
-    const grainOpacity = mix(0.045, 0.085, smoothstep(0.18, 0.86, contentP));
+    const zoom = 1 + easeOutExpo(contentP) * config.zoomAmount + smoothstep(0.68, 0.9, contentP) * config.zoomExtra;
+    const panX = (eased - 0.5) * config.panXAmount;
+    const panY = (timelineP - 0.5) * config.panYAmount;
+    const depthOpacity = mix(0.18, config.depthMax, smoothstep(0.08, 0.82, contentP));
+    const depthX = (eased - 0.5) * config.depthXAmount;
+    const depthY = (timelineP - 0.5) * config.depthYAmount;
+    const grainOpacity = mix(0.035, config.grainMax, smoothstep(0.18, 0.86, contentP));
     const uiOpacity = clamp(1 - p * 4.25);
 
     root.style.setProperty('--progress', p.toFixed(4));
@@ -363,7 +389,7 @@
 
   function onTouchMove(event) {
     if (!event.touches.length) return;
-    event.preventDefault();
+    if (event.cancelable) event.preventDefault();
 
     const now = performance.now();
     const touchY = event.touches[0].clientY;
@@ -514,10 +540,31 @@
   }
 
   function initEvents() {
+    if (isNativeScroll) {
+      const syncNativeViewport = () => {
+        cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(() => {
+          resizeCanvas();
+          setProgress(getNativeScrollProgress());
+        });
+      };
+
+      window.addEventListener('scroll', onNativeScroll, { passive: true });
+      window.addEventListener('resize', syncNativeViewport);
+      window.addEventListener('orientationchange', () => setTimeout(syncNativeViewport, 250));
+
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', syncNativeViewport);
+      }
+
+      return;
+    }
+
     window.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('touchstart', onTouchStart, { passive: true });
     window.addEventListener('touchmove', onTouchMove, { passive: false });
     window.addEventListener('touchend', onTouchEnd, { passive: true });
+    window.addEventListener('touchcancel', onTouchEnd, { passive: true });
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', () => {
       cancelAnimationFrame(resizeRaf);
@@ -527,7 +574,12 @@
   }
 
   async function init() {
-    updateCssState(0);
+    if (isNativeScroll) {
+      targetProgress = getNativeScrollProgress();
+      progress = targetProgress;
+    }
+
+    updateCssState(progress);
     initEvents();
 
     try {
