@@ -27,23 +27,10 @@ body {
   overscroll-behavior: none;
 }
 
-html.is-native-scroll,
-html.is-native-scroll body {
-  height: auto;
-  min-height: 100%;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-}
-
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #fff;
   touch-action: none;
-}
-
-html.is-native-scroll body {
-  touch-action: pan-y;
 }
 
 .app,
@@ -56,17 +43,6 @@ html.is-native-scroll body {
   height: 100dvh;
   overflow: hidden;
   background: #000;
-}
-
-.mobile-scroll-spacer {
-  display: none;
-}
-
-html.is-native-scroll .mobile-scroll-spacer {
-  display: block;
-  width: 1px;
-  height: 620dvh;
-  pointer-events: none;
 }
 
 .frame-canvas,
