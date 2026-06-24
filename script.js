@@ -73,6 +73,7 @@
   let lastTouchTs = 0;
   let stableViewportWidth = window.innerWidth;
   let stableViewportHeight = window.innerHeight;
+  let currentViewportHeight = window.innerHeight;
   let stableMaxScroll = 0;
 
   const clamp = (value, min = 0, max = 1) => Math.min(Math.max(value, min), max);
@@ -107,15 +108,24 @@
     startLoop();
   }
 
-  function applyStableMobileViewport() {
+  function getMobileViewportHeight() {
+    const visualHeight = window.visualViewport ? window.visualViewport.height : 0;
+    return Math.ceil(Math.max(window.innerHeight || 0, visualHeight || 0));
+  }
+
+  function applyStableMobileViewport(resetScrollDistance = true) {
     if (!isNativeScroll) return;
 
-    stableViewportWidth = window.innerWidth;
-    stableViewportHeight = window.innerHeight;
-    stableMaxScroll = stableViewportHeight * 5.2;
+    currentViewportHeight = getMobileViewportHeight();
 
-    root.style.setProperty('--mobile-vh', `${stableViewportHeight}px`);
-    root.style.setProperty('--mobile-scroll-height', `${stableViewportHeight * 6.2}px`);
+    if (resetScrollDistance || stableMaxScroll <= 0) {
+      stableViewportWidth = window.innerWidth;
+      stableViewportHeight = currentViewportHeight;
+      stableMaxScroll = stableViewportHeight * 5.2;
+    }
+
+    root.style.setProperty('--mobile-vh', `${currentViewportHeight}px`);
+    root.style.setProperty('--mobile-scroll-height', `${stableMaxScroll + currentViewportHeight}px`);
   }
 
   function getNativeScrollProgress() {
@@ -296,7 +306,7 @@
   function resizeCanvas() {
     const dpr = Math.min(window.devicePixelRatio || 1, config.maxDevicePixelRatio);
     const width = Math.ceil(window.innerWidth * dpr);
-    const viewportHeight = isNativeScroll ? stableViewportHeight : window.innerHeight;
+    const viewportHeight = isNativeScroll ? currentViewportHeight : window.innerHeight;
     const height = Math.ceil(viewportHeight * dpr);
 
     if (canvas.width !== width || canvas.height !== height) {
@@ -586,14 +596,10 @@
       const hasLenis = initLenis();
 
       const syncNativeViewport = () => {
-        if (window.innerWidth === stableViewportWidth) {
-          setProgress(getNativeScrollProgress());
-          return;
-        }
-
+        const shouldResetScrollDistance = window.innerWidth !== stableViewportWidth;
         cancelAnimationFrame(resizeRaf);
         resizeRaf = requestAnimationFrame(() => {
-          applyStableMobileViewport();
+          applyStableMobileViewport(shouldResetScrollDistance);
           resizeCanvas();
           if (lenis) lenis.resize();
           setProgress(getNativeScrollProgress());
@@ -608,9 +614,7 @@
       window.addEventListener('orientationchange', () => setTimeout(syncNativeViewport, 250));
 
       if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', () => {
-          if (window.innerWidth !== stableViewportWidth) syncNativeViewport();
-        });
+        window.visualViewport.addEventListener('resize', syncNativeViewport);
       }
 
       return;
