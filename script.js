@@ -17,6 +17,7 @@
     wheelSensitivity: 0.00018,
     touchSensitivity: 0.00042,
     keyboardImpulse: 0.018,
+    maxProgressStep: isNativeScroll ? 0.008 : 0.010,
     introRatio: 0.075,
     outroRatio: 0.085,
     baseSmoothing: isNativeScroll ? 0.11 : 0.075,
@@ -58,6 +59,7 @@
   let usingVideoFallback = false;
 
   let progress = 0;
+  let desiredProgress = 0;
   let targetProgress = 0;
   let inputVelocity = 0;
   let lastRenderedFrame = -1;
@@ -104,7 +106,7 @@
   }
 
   function setProgress(value) {
-    targetProgress = clamp(value);
+    desiredProgress = clamp(value);
     startLoop();
   }
 
@@ -129,7 +131,7 @@
   }
 
   function getNativeScrollProgress() {
-    if (stableMaxScroll <= 0) return targetProgress;
+    if (stableMaxScroll <= 0) return desiredProgress;
     const scrollY = lenis ? lenis.scroll : window.scrollY;
     return clamp(scrollY / stableMaxScroll);
   }
@@ -392,13 +394,16 @@
 
   function loop() {
     if (Math.abs(inputVelocity) > 0.00001) {
-      targetProgress = clamp(targetProgress + inputVelocity);
-      if ((targetProgress === 0 && inputVelocity < 0) || (targetProgress === 1 && inputVelocity > 0)) {
+      desiredProgress = clamp(desiredProgress + inputVelocity);
+      if ((desiredProgress === 0 && inputVelocity < 0) || (desiredProgress === 1 && inputVelocity > 0)) {
         inputVelocity = 0;
       } else {
         inputVelocity *= config.friction;
       }
     }
+
+    const targetDelta = desiredProgress - targetProgress;
+    targetProgress += clamp(targetDelta, -config.maxProgressStep, config.maxProgressStep);
 
     const distance = Math.abs(targetProgress - progress);
     const smoothing = distance > 0.08 ? config.fastSmoothing : config.baseSmoothing;
@@ -412,6 +417,7 @@
     else drawFrameForProgress(progress);
 
     const stillMoving = Math.abs(targetProgress - progress) > config.settleThreshold ||
+      Math.abs(desiredProgress - targetProgress) > config.settleThreshold ||
       Math.abs(inputVelocity) > 0.00001 ||
       Math.abs(targetTime - currentTime) > 0.002;
 
@@ -450,7 +456,7 @@
     lastTouchY = touchY;
     lastTouchTs = now;
 
-    setProgress(targetProgress + delta * config.touchSensitivity);
+    setProgress(desiredProgress + delta * config.touchSensitivity);
     inputVelocity = clamp((delta / dt) * config.touchSensitivity * 10, -config.velocityClamp, config.velocityClamp);
   }
 
@@ -636,8 +642,9 @@
   async function init() {
     if (isNativeScroll) {
       applyStableMobileViewport();
-      targetProgress = getNativeScrollProgress();
-      progress = targetProgress;
+      desiredProgress = getNativeScrollProgress();
+      targetProgress = desiredProgress;
+      progress = desiredProgress;
     }
 
     updateCssState(progress);
