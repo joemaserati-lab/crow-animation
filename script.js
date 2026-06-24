@@ -66,6 +66,8 @@
   let targetTime = 0;
 
   let rafId = null;
+  let lenis = null;
+  let lenisRafId = null;
   let resizeRaf = null;
   let lastTouchY = 0;
   let lastTouchTs = 0;
@@ -118,11 +120,38 @@
 
   function getNativeScrollProgress() {
     if (stableMaxScroll <= 0) return targetProgress;
-    return clamp(window.scrollY / stableMaxScroll);
+    const scrollY = lenis ? lenis.scroll : window.scrollY;
+    return clamp(scrollY / stableMaxScroll);
   }
 
   function onNativeScroll() {
     setProgress(getNativeScrollProgress());
+  }
+
+  function initLenis() {
+    if (!isNativeScroll || !window.Lenis) return false;
+
+    lenis = new window.Lenis({
+      autoRaf: false,
+      gestureOrientation: 'vertical',
+      lerp: 0.08,
+      smoothWheel: false,
+      syncTouch: true,
+      touchMultiplier: 1.15,
+    });
+
+    lenis.on('scroll', ({ scroll }) => {
+      if (stableMaxScroll <= 0) return;
+      setProgress(scroll / stableMaxScroll);
+    });
+
+    const raf = (time) => {
+      lenis.raf(time);
+      lenisRafId = requestAnimationFrame(raf);
+    };
+
+    lenisRafId = requestAnimationFrame(raf);
+    return true;
   }
 
   function mapToContentProgress(p) {
@@ -554,6 +583,8 @@
 
   function initEvents() {
     if (isNativeScroll) {
+      const hasLenis = initLenis();
+
       const syncNativeViewport = () => {
         if (window.innerWidth === stableViewportWidth) {
           setProgress(getNativeScrollProgress());
@@ -564,11 +595,15 @@
         resizeRaf = requestAnimationFrame(() => {
           applyStableMobileViewport();
           resizeCanvas();
+          if (lenis) lenis.resize();
           setProgress(getNativeScrollProgress());
         });
       };
 
-      window.addEventListener('scroll', onNativeScroll, { passive: true });
+      if (!hasLenis) {
+        window.addEventListener('scroll', onNativeScroll, { passive: true });
+      }
+
       window.addEventListener('resize', syncNativeViewport);
       window.addEventListener('orientationchange', () => setTimeout(syncNativeViewport, 250));
 
