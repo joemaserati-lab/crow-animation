@@ -3,7 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Crow Scroll Animation – Canvas Edition</title>
+  <meta name="theme-color" content="#000000" />
+  <meta name="description" content="Crow scroll animation ottimizzata: canvas frame sequence con fallback video e qualità adattiva." />
+  <title>Crow Scroll Animation – Optimized Deploy</title>
+
+  <!-- Deploy note: gli asset sono caricati dal repository originale via script[data-asset-base].
+       Per un deploy self-hosted copia frames/, frames-mobile-portrait/ e mp4 in questa cartella
+       e imposta data-asset-base="" sullo script in fondo alla pagina. -->
+  <link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -14,10 +21,11 @@
       <video
         id="scrollVideoFallback"
         class="scroll-video-fallback"
-        src="crow-threshold-scrub.mp4"
+        data-src="crow-threshold-scrub.mp4"
         muted
         playsinline
-        preload="auto"
+        preload="metadata"
+        crossorigin="anonymous"
         aria-hidden="true"
       ></video>
 
@@ -39,9 +47,19 @@
       </div>
     </section>
   </main>
+
   <div class="mobile-scroll-spacer" aria-hidden="true"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/lenis@1.3.8/dist/lenis.min.js"></script>
-  <script src="script.js"></script>
+  <noscript>
+    <style>
+      .loader::after { content: "JavaScript richiesto per questa animazione."; }
+    </style>
+  </noscript>
+
+  <script
+    src="script.js"
+    data-asset-base="https://raw.githubusercontent.com/joemaserati-lab/crow-animation/main/"
+    defer
+  ></script>
 </body>
 </html>

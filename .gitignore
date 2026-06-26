@@ -3,3 +3,6 @@ crow-threshold-ascii-art.mp4
 crow-animation-premium-webgl/
 crow-animation-premium-webgl.zip
 new frames/
+node_modules/
+reports/
+.DS_Store

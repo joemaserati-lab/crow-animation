@@ -1,43 +1,60 @@
 (() => {
+  'use strict';
+
   const canvas = document.querySelector('#frameCanvas');
   const video = document.querySelector('#scrollVideoFallback');
+  const stage = document.querySelector('#scrubStage');
   const root = document.documentElement;
   const body = document.body;
   const loaderText = document.querySelector('#loaderText');
+  const currentScript = document.currentScript;
+
+  const ASSET_BASE = (window.CROW_ASSET_BASE ?? currentScript?.dataset.assetBase ?? '').trim();
+  const DEBUG = new URLSearchParams(window.location.search).has('debug');
   const mobileQuery = window.matchMedia('(pointer: coarse), (max-width: 767px)');
+  const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
   const isNativeScroll = mobileQuery.matches;
+  const reducedMotion = reducedMotionQuery.matches;
+
+  if (!canvas || !video || !stage) return;
 
   if (isNativeScroll) {
     root.classList.add('is-native-scroll');
     body.classList.add('is-native-scroll');
   }
 
+  const capabilities = getCapabilities();
+  const quality = pickQuality(capabilities);
+  root.classList.add(`quality-${quality}`);
+
   const config = {
     manifestPath: isNativeScroll ? 'frames-mobile-portrait/manifest.json' : 'frames/manifest.json',
     wheelSensitivity: 0.00018,
-    touchSensitivity: 0.00042,
+    touchSensitivity: 0.00040,
     keyboardImpulse: 0.018,
     maxProgressStep: isNativeScroll ? 0.008 : 0.010,
     introRatio: 0.075,
     outroRatio: 0.085,
-    baseSmoothing: isNativeScroll ? 0.11 : 0.075,
+    baseSmoothing: isNativeScroll ? 0.12 : 0.082,
     fastSmoothing: isNativeScroll ? 0.24 : 0.19,
-    maxDevicePixelRatio: isNativeScroll ? 1.5 : 2,
-    preloadConcurrency: isNativeScroll ? 6 : 8,
-    initialPreloadRatio: isNativeScroll ? 0.34 : 0.28,
-    lookAheadFrames: isNativeScroll ? 14 : 18,
-    fallbackMinSeekDelta: 0.004,
+    maxDevicePixelRatio: quality === 'high' ? 1.5 : quality === 'medium' ? 1.35 : 1,
+    preloadConcurrency: quality === 'high' ? 7 : quality === 'medium' ? 5 : 3,
+    initialPreloadRatio: quality === 'high' ? 0.34 : quality === 'medium' ? 0.27 : 0.20,
+    lookAheadFrames: quality === 'high' ? 18 : quality === 'medium' ? 12 : 7,
+    backgroundBatchSize: quality === 'high' ? 6 : quality === 'medium' ? 4 : 2,
+    fallbackMinSeekDelta: reducedMotion ? 0.018 : 0.006,
     friction: isNativeScroll ? 0.86 : 0.90,
     velocityClamp: 0.07,
     settleThreshold: 0.00035,
-    zoomAmount: isNativeScroll ? 0.105 : 0.18,
-    zoomExtra: isNativeScroll ? 0.018 : 0.035,
-    panXAmount: isNativeScroll ? -15 : -28,
-    panYAmount: isNativeScroll ? -10 : -18,
-    depthXAmount: isNativeScroll ? 12 : 24,
-    depthYAmount: isNativeScroll ? 8 : 16,
-    depthMax: isNativeScroll ? 0.44 : 0.72,
-    grainMax: isNativeScroll ? 0.052 : 0.085,
+    zoomAmount: quality === 'low' ? 0.07 : isNativeScroll ? 0.10 : 0.16,
+    zoomExtra: quality === 'low' ? 0.0 : isNativeScroll ? 0.015 : 0.025,
+    panXAmount: quality === 'low' ? -10 : isNativeScroll ? -15 : -24,
+    panYAmount: quality === 'low' ? -7 : isNativeScroll ? -10 : -16,
+    depthXAmount: isNativeScroll ? 10 : 20,
+    depthYAmount: isNativeScroll ? 7 : 14,
+    depthMax: quality === 'high' ? 0.58 : 0.34,
+    grainMax: quality === 'high' ? 0.056 : quality === 'medium' ? 0.038 : 0,
+    preferWebGL: quality === 'high' && !isNativeScroll && !reducedMotion,
   };
 
   let gl = null;
@@ -50,7 +67,7 @@
   let manifest = null;
   let framePaths = [];
   let frames = [];
-  let loadingFrames = new Set();
+  let loadingFrames = new Map();
   let frameCount = 0;
   let loadedFrames = 0;
   let criticalFrames = 0;
@@ -66,10 +83,7 @@
   let duration = 0;
   let currentTime = 0;
   let targetTime = 0;
-
   let rafId = null;
-  let lenis = null;
-  let lenisRafId = null;
   let resizeRaf = null;
   let lastTouchY = 0;
   let lastTouchTs = 0;
@@ -77,7 +91,13 @@
   let stableViewportHeight = window.innerHeight;
   let currentViewportHeight = window.innerHeight;
   let stableMaxScroll = 0;
+  let degraded = false;
+  let longFrameCount = 0;
+  let lastLoopTs = 0;
+  let perfPanel = null;
+  let lastPerfUpdate = 0;
 
+  const cssCache = new Map();
   const clamp = (value, min = 0, max = 1) => Math.min(Math.max(value, min), max);
   const mix = (a, b, t) => a + (b - a) * t;
   const easeInOutCubic = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -96,8 +116,39 @@
     { in: 0.91, out: 1.00, from: 0.94, to: 1.00, ease: easeInOutCubic },
   ];
 
+  function getCapabilities() {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+    return {
+      isNativeScroll,
+      reducedMotion,
+      deviceMemory: navigator.deviceMemory || 4,
+      hardwareConcurrency: navigator.hardwareConcurrency || 4,
+      saveData: Boolean(connection.saveData),
+      effectiveType: connection.effectiveType || 'unknown',
+    };
+  }
+
+  function pickQuality(info) {
+    if (info.reducedMotion || info.saveData || info.deviceMemory <= 2 || info.hardwareConcurrency <= 2) return 'low';
+    if (info.isNativeScroll || info.deviceMemory <= 4 || /2g|3g/.test(info.effectiveType)) return 'medium';
+    return 'high';
+  }
+
   function setLoader(text) {
     if (loaderText) loaderText.textContent = text;
+  }
+
+  function setCssVar(name, value) {
+    if (cssCache.get(name) === value) return;
+    cssCache.set(name, value);
+    root.style.setProperty(name, value);
+  }
+
+  function resolveAssetUrl(path) {
+    if (!path) return path;
+    if (/^(https?:)?\/\//i.test(path) || path.startsWith('data:') || path.startsWith('blob:')) return path;
+    if (!ASSET_BASE) return path;
+    return new URL(path.replace(/^\.\//, ''), ASSET_BASE.endsWith('/') ? ASSET_BASE : `${ASSET_BASE}/`).toString();
   }
 
   function applyImpulse(delta) {
@@ -117,7 +168,6 @@
 
   function applyStableMobileViewport(resetScrollDistance = true) {
     if (!isNativeScroll) return;
-
     currentViewportHeight = getMobileViewportHeight();
 
     if (resetScrollDistance || stableMaxScroll <= 0) {
@@ -126,44 +176,17 @@
       stableMaxScroll = stableViewportHeight * 5.2;
     }
 
-    root.style.setProperty('--mobile-vh', `${currentViewportHeight}px`);
-    root.style.setProperty('--mobile-scroll-height', `${stableMaxScroll + currentViewportHeight}px`);
+    setCssVar('--mobile-vh', `${currentViewportHeight}px`);
+    setCssVar('--mobile-scroll-height', `${stableMaxScroll + currentViewportHeight}px`);
   }
 
   function getNativeScrollProgress() {
     if (stableMaxScroll <= 0) return desiredProgress;
-    const scrollY = lenis ? lenis.scroll : window.scrollY;
-    return clamp(scrollY / stableMaxScroll);
+    return clamp(window.scrollY / stableMaxScroll);
   }
 
   function onNativeScroll() {
     setProgress(getNativeScrollProgress());
-  }
-
-  function initLenis() {
-    if (!isNativeScroll || !window.Lenis) return false;
-
-    lenis = new window.Lenis({
-      autoRaf: false,
-      gestureOrientation: 'vertical',
-      lerp: 0.08,
-      smoothWheel: false,
-      syncTouch: true,
-      touchMultiplier: 1.15,
-    });
-
-    lenis.on('scroll', ({ scroll }) => {
-      if (stableMaxScroll <= 0) return;
-      setProgress(scroll / stableMaxScroll);
-    });
-
-    const raf = (time) => {
-      lenis.raf(time);
-      lenisRafId = requestAnimationFrame(raf);
-    };
-
-    lenisRafId = requestAnimationFrame(raf);
-    return true;
   }
 
   function mapToContentProgress(p) {
@@ -188,32 +211,38 @@
     const zoom = 1 + easeOutExpo(contentP) * config.zoomAmount + smoothstep(0.68, 0.9, contentP) * config.zoomExtra;
     const panX = (eased - 0.5) * config.panXAmount;
     const panY = (timelineP - 0.5) * config.panYAmount;
-    const depthOpacity = mix(0.18, config.depthMax, smoothstep(0.08, 0.82, contentP));
+    const depthOpacity = mix(0.14, config.depthMax, smoothstep(0.08, 0.82, contentP));
     const depthX = (eased - 0.5) * config.depthXAmount;
     const depthY = (timelineP - 0.5) * config.depthYAmount;
-    const grainOpacity = mix(0.035, config.grainMax, smoothstep(0.18, 0.86, contentP));
+    const grainOpacity = mix(0.020, config.grainMax, smoothstep(0.18, 0.86, contentP));
     const uiOpacity = clamp(1 - p * 4.25);
 
-    root.style.setProperty('--progress', p.toFixed(4));
-    root.style.setProperty('--timeline-progress', timelineP.toFixed(4));
-    root.style.setProperty('--black-opacity', blackOpacity.toFixed(3));
-    root.style.setProperty('--white-opacity', whiteOpacity.toFixed(3));
-    root.style.setProperty('--zoom', zoom.toFixed(4));
-    root.style.setProperty('--pan-x', `${panX.toFixed(2)}px`);
-    root.style.setProperty('--pan-y', `${panY.toFixed(2)}px`);
-    root.style.setProperty('--depth-opacity', depthOpacity.toFixed(3));
-    root.style.setProperty('--depth-x', `${depthX.toFixed(2)}px`);
-    root.style.setProperty('--depth-y', `${depthY.toFixed(2)}px`);
-    root.style.setProperty('--grain-opacity', grainOpacity.toFixed(3));
-    root.style.setProperty('--ui-opacity', uiOpacity.toFixed(3));
+    setCssVar('--progress', p.toFixed(4));
+    setCssVar('--timeline-progress', timelineP.toFixed(4));
+    setCssVar('--black-opacity', blackOpacity.toFixed(3));
+    setCssVar('--white-opacity', whiteOpacity.toFixed(3));
+    setCssVar('--zoom', zoom.toFixed(4));
+    setCssVar('--pan-x', `${panX.toFixed(2)}px`);
+    setCssVar('--pan-y', `${panY.toFixed(2)}px`);
+    setCssVar('--depth-opacity', depthOpacity.toFixed(3));
+    setCssVar('--depth-x', `${depthX.toFixed(2)}px`);
+    setCssVar('--depth-y', `${depthY.toFixed(2)}px`);
+    setCssVar('--grain-opacity', grainOpacity.toFixed(3));
+    setCssVar('--ui-opacity', uiOpacity.toFixed(3));
   }
 
   function initWebGL() {
+    if (!config.preferWebGL) {
+      ctx2d = canvas.getContext('2d', { alpha: false, desynchronized: true });
+      renderer = '2d';
+      return;
+    }
+
     gl = canvas.getContext('webgl2', { alpha: false, antialias: false, powerPreference: 'high-performance' }) ||
          canvas.getContext('webgl', { alpha: false, antialias: false, powerPreference: 'high-performance' });
 
     if (!gl) {
-      ctx2d = canvas.getContext('2d', { alpha: false });
+      ctx2d = canvas.getContext('2d', { alpha: false, desynchronized: true });
       renderer = '2d';
       return;
     }
@@ -242,13 +271,13 @@
         vec2 center = vec2(0.5, 0.5);
         vec2 offset = uv - center;
         float vignette = smoothstep(0.88, 0.22, length(offset));
-        float aberration = 0.0015 + u_progress * 0.0025;
+        float aberration = 0.0010 + u_progress * 0.0018;
         float r = texture2D(u_texture, uv + offset * aberration).r;
         float g = texture2D(u_texture, uv).g;
         float b = texture2D(u_texture, uv - offset * aberration).b;
         vec3 color = vec3(r, g, b);
-        color *= mix(0.86, 1.04, vignette);
-        color += smoothstep(0.65, 1.0, u_progress) * 0.025;
+        color *= mix(0.88, 1.03, vignette);
+        color += smoothstep(0.65, 1.0, u_progress) * 0.018;
         gl_FragColor = vec4(color, 1.0);
       }
     `;
@@ -300,7 +329,7 @@
     } catch (error) {
       console.warn('[Crow Animation] WebGL non disponibile, uso Canvas 2D:', error);
       gl = null;
-      ctx2d = canvas.getContext('2d', { alpha: false });
+      ctx2d = canvas.getContext('2d', { alpha: false, desynchronized: true });
       renderer = '2d';
     }
   }
@@ -324,7 +353,6 @@
 
   function drawImageCover2d(image) {
     if (!ctx2d || !image || !canvas.width || !canvas.height) return;
-
     const cw = canvas.width;
     const ch = canvas.height;
     const iw = image.naturalWidth || image.width;
@@ -334,14 +362,14 @@
     const sh = ih * scale;
     const sx = (cw - sw) * 0.5;
     const sy = (ch - sh) * 0.5;
-
     ctx2d.clearRect(0, 0, cw, ch);
+    ctx2d.imageSmoothingEnabled = true;
+    ctx2d.imageSmoothingQuality = quality === 'low' ? 'medium' : 'high';
     ctx2d.drawImage(image, sx, sy, sw, sh);
   }
 
   function drawImageWebGL(image, p) {
     if (!gl || !image) return;
-
     gl.useProgram(glProgram);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.activeTexture(gl.TEXTURE0);
@@ -359,29 +387,43 @@
     return clamp(Math.round(contentP * (frameCount - 1)), 0, frameCount - 1);
   }
 
+  function findNearestLoadedFrame(index) {
+    if (frames[index]?.complete) return index;
+    for (let distance = 1; distance <= config.lookAheadFrames; distance += 1) {
+      const before = index - distance;
+      const after = index + distance;
+      if (before >= 0 && frames[before]?.complete) return before;
+      if (after < frameCount && frames[after]?.complete) return after;
+    }
+    return -1;
+  }
+
   function drawFrameForProgress(p, force = false) {
     if (!canvasReady || !frameCount) return;
-
     const index = getFrameIndexForProgress(p);
     if (!force && index === lastRenderedFrame) return;
 
-    const frame = frames[index];
-    if (!frame || !frame.complete) {
-      requestFrameLoad(index);
+    let frame = frames[index];
+    let renderIndex = index;
+
+    if (!frame?.complete) {
+      requestFrameLoad(index, true);
       requestLookAhead(index);
-      return;
+      const nearest = findNearestLoadedFrame(index);
+      if (nearest < 0) return;
+      frame = frames[nearest];
+      renderIndex = nearest;
     }
 
     if (renderer === 'webgl') drawImageWebGL(frame, mapToContentProgress(p));
     else drawImageCover2d(frame);
 
-    lastRenderedFrame = index;
+    lastRenderedFrame = renderIndex;
     requestLookAhead(index);
   }
 
   function updateVideoFallback(p, smoothing) {
     if (!fallbackReady || !duration) return;
-
     const contentP = mapTimeline(mapToContentProgress(p));
     const safeEnd = Math.max(duration - 0.04, 0);
     targetTime = contentP * safeEnd;
@@ -392,7 +434,31 @@
     }
   }
 
-  function loop() {
+  function maybeDegrade(ts) {
+    if (degraded || reducedMotion || quality === 'low') return;
+    if (!lastLoopTs) {
+      lastLoopTs = ts;
+      return;
+    }
+    const delta = ts - lastLoopTs;
+    lastLoopTs = ts;
+    if (delta > 42) longFrameCount += 1;
+    else longFrameCount = Math.max(0, longFrameCount - 1);
+
+    if (longFrameCount >= 8) {
+      degraded = true;
+      config.maxDevicePixelRatio = Math.min(config.maxDevicePixelRatio, 1.15);
+      config.lookAheadFrames = Math.min(config.lookAheadFrames, 8);
+      config.grainMax = 0;
+      root.classList.remove('quality-high', 'quality-medium');
+      root.classList.add('quality-low');
+      resizeCanvas();
+    }
+  }
+
+  function loop(ts = performance.now()) {
+    maybeDegrade(ts);
+
     if (Math.abs(inputVelocity) > 0.00001) {
       desiredProgress = clamp(desiredProgress + inputVelocity);
       if ((desiredProgress === 0 && inputVelocity < 0) || (desiredProgress === 1 && inputVelocity > 0)) {
@@ -415,6 +481,8 @@
 
     if (usingVideoFallback) updateVideoFallback(progress, smoothing);
     else drawFrameForProgress(progress);
+
+    if (DEBUG) updatePerfPanel(ts);
 
     const stillMoving = Math.abs(targetProgress - progress) > config.settleThreshold ||
       Math.abs(desiredProgress - targetProgress) > config.settleThreshold ||
@@ -448,14 +516,12 @@
   function onTouchMove(event) {
     if (!event.touches.length) return;
     if (event.cancelable) event.preventDefault();
-
     const now = performance.now();
     const touchY = event.touches[0].clientY;
     const delta = lastTouchY - touchY;
     const dt = Math.max(now - lastTouchTs, 16);
     lastTouchY = touchY;
     lastTouchTs = now;
-
     setProgress(desiredProgress + delta * config.touchSensitivity);
     inputVelocity = clamp((delta / dt) * config.touchSensitivity * 10, -config.velocityClamp, config.velocityClamp);
   }
@@ -467,61 +533,81 @@
   function onKeyDown(event) {
     const keys = ['ArrowDown', 'ArrowRight', 'PageDown', 'Space', 'ArrowUp', 'ArrowLeft', 'PageUp', 'Home', 'End'];
     if (!keys.includes(event.code)) return;
-
     event.preventDefault();
-
     if (event.code === 'Home') return setProgress(0);
     if (event.code === 'End') return setProgress(1);
-
     const direction = ['ArrowUp', 'ArrowLeft', 'PageUp'].includes(event.code) ? -1 : 1;
     const multiplier = event.code.includes('Page') ? 2.5 : 1;
     applyImpulse(direction * config.keyboardImpulse * multiplier);
   }
 
   async function loadManifest() {
-    const response = await fetch(config.manifestPath, { cache: 'no-cache' });
-    if (!response.ok) throw new Error('Manifest non trovato');
+    const response = await fetch(config.manifestPath, { cache: 'force-cache' });
+    if (!response.ok) throw new Error(`Manifest non trovato: ${config.manifestPath}`);
     return response.json();
   }
 
-  function loadImage(src) {
+  function preloadFirstAsset(url) {
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'image';
+    link.href = url;
+    link.crossOrigin = 'anonymous';
+    document.head.appendChild(link);
+  }
+
+  function loadImage(src, highPriority = false) {
     return new Promise((resolve, reject) => {
       const image = new Image();
       image.decoding = 'async';
-      image.onload = () => resolve(image);
-      image.onerror = reject;
+      image.crossOrigin = 'anonymous';
+      if ('fetchPriority' in image) image.fetchPriority = highPriority ? 'high' : 'low';
+      image.onload = async () => {
+        try {
+          if (image.decode) await image.decode();
+        } catch (_) {
+          // decode() può fallire su immagini già decodificate: onload resta sufficiente.
+        }
+        resolve(image);
+      };
+      image.onerror = () => reject(new Error(`Frame non caricato: ${src}`));
       image.src = src;
     });
   }
 
-  async function requestFrameLoad(index) {
+  async function requestFrameLoad(index, highPriority = false) {
     if (index < 0 || index >= frameCount) return null;
-    if (frames[index] || loadingFrames.has(index)) return frames[index] || null;
+    if (frames[index]) return frames[index];
+    if (loadingFrames.has(index)) return loadingFrames.get(index);
 
-    loadingFrames.add(index);
-    try {
-      const image = await loadImage(framePaths[index]);
-      frames[index] = image;
-      loadedFrames += 1;
-      const percent = Math.round((loadedFrames / frameCount) * 100);
-      if (!body.classList.contains('is-ready')) setLoader(`Caricamento frame ${percent}%`);
-      return image;
-    } finally {
-      loadingFrames.delete(index);
-    }
+    const promise = loadImage(framePaths[index], highPriority)
+      .then((image) => {
+        frames[index] = image;
+        loadedFrames += 1;
+        const percent = Math.round((loadedFrames / frameCount) * 100);
+        if (!body.classList.contains('is-ready')) setLoader(`Caricamento frame ${percent}%`);
+        return image;
+      })
+      .finally(() => {
+        loadingFrames.delete(index);
+      });
+
+    loadingFrames.set(index, promise);
+    return promise;
   }
 
   function requestLookAhead(center) {
     const start = Math.max(0, center - Math.floor(config.lookAheadFrames / 3));
     const end = Math.min(frameCount - 1, center + config.lookAheadFrames);
-    for (let i = start; i <= end; i += 1) requestFrameLoad(i);
+    for (let i = start; i <= end; i += 1) requestFrameLoad(i, false);
   }
 
   async function preloadCriticalFrames() {
-    criticalFrames = Math.max(12, Math.ceil(frameCount * config.initialPreloadRatio));
+    criticalFrames = Math.max(8, Math.ceil(frameCount * config.initialPreloadRatio));
     const indices = new Set([0, frameCount - 1]);
 
     for (let i = 0; i < criticalFrames; i += 1) indices.add(i);
+    for (let p = 0.20; p <= 0.80; p += 0.20) indices.add(Math.round((frameCount - 1) * p));
 
     const ordered = [...indices].sort((a, b) => a - b);
     let cursor = 0;
@@ -529,7 +615,7 @@
     const worker = async () => {
       while (cursor < ordered.length) {
         const index = ordered[cursor++];
-        await requestFrameLoad(index);
+        await requestFrameLoad(index, index === 0);
         if (index === 0) drawFrameForProgress(0, true);
       }
     };
@@ -541,14 +627,14 @@
     let index = 0;
     const batch = () => {
       let count = 0;
-      while (index < frameCount && count < 6) {
-        requestFrameLoad(index);
+      while (index < frameCount && count < config.backgroundBatchSize) {
+        requestFrameLoad(index, false);
         index += 1;
         count += 1;
       }
       if (index < frameCount) {
-        if ('requestIdleCallback' in window) requestIdleCallback(batch, { timeout: 600 });
-        else setTimeout(batch, 80);
+        if ('requestIdleCallback' in window) requestIdleCallback(batch, { timeout: 800 });
+        else setTimeout(batch, 120);
       }
     };
     batch();
@@ -556,15 +642,13 @@
 
   async function initCanvasMode() {
     manifest = await loadManifest();
+    if (!manifest.frames || !manifest.frames.length) throw new Error('Manifest frame vuoto');
 
-    if (!manifest.frames || !manifest.frames.length) {
-      throw new Error('Manifest frame vuoto');
-    }
-
-    framePaths = manifest.frames;
+    framePaths = manifest.frames.map(resolveAssetUrl);
     frameCount = framePaths.length;
     frames = new Array(frameCount);
 
+    preloadFirstAsset(framePaths[0]);
     initWebGL();
     resizeCanvas();
     await preloadCriticalFrames();
@@ -573,7 +657,7 @@
     usingVideoFallback = false;
     body.classList.remove('is-video-fallback');
     body.classList.add('is-ready');
-    drawFrameForProgress(0, true);
+    drawFrameForProgress(progress, true);
     preloadBackgroundFrames();
     startLoop();
   }
@@ -591,6 +675,7 @@
 
   function initFallbackMode() {
     setLoader('Uso fallback video');
+    if (!video.src) video.src = resolveAssetUrl(video.dataset.src || 'crow-threshold-scrub.mp4');
     video.addEventListener('loadedmetadata', prepareFallback, { once: true });
     video.addEventListener('canplay', prepareFallback, { once: true });
     video.addEventListener('play', () => video.pause());
@@ -599,30 +684,23 @@
 
   function initEvents() {
     if (isNativeScroll) {
-      const hasLenis = initLenis();
-
       const syncNativeViewport = () => {
         const shouldResetScrollDistance = window.innerWidth !== stableViewportWidth;
         cancelAnimationFrame(resizeRaf);
         resizeRaf = requestAnimationFrame(() => {
           applyStableMobileViewport(shouldResetScrollDistance);
           resizeCanvas();
-          if (lenis) lenis.resize();
           setProgress(getNativeScrollProgress());
         });
       };
 
-      if (!hasLenis) {
-        window.addEventListener('scroll', onNativeScroll, { passive: true });
-      }
-
-      window.addEventListener('resize', syncNativeViewport);
-      window.addEventListener('orientationchange', () => setTimeout(syncNativeViewport, 250));
+      window.addEventListener('scroll', onNativeScroll, { passive: true });
+      window.addEventListener('resize', syncNativeViewport, { passive: true });
+      window.addEventListener('orientationchange', () => setTimeout(syncNativeViewport, 250), { passive: true });
 
       if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', syncNativeViewport);
+        window.visualViewport.addEventListener('resize', syncNativeViewport, { passive: true });
       }
-
       return;
     }
 
@@ -636,10 +714,33 @@
       cancelAnimationFrame(resizeRaf);
       resizeRaf = requestAnimationFrame(resizeCanvas);
       startLoop();
-    });
+    }, { passive: true });
+  }
+
+  function createPerfPanel() {
+    if (!DEBUG) return;
+    perfPanel = document.createElement('div');
+    perfPanel.className = 'perf-panel';
+    document.body.appendChild(perfPanel);
+  }
+
+  function updatePerfPanel(ts) {
+    if (!perfPanel || ts - lastPerfUpdate < 250) return;
+    lastPerfUpdate = ts;
+    const memory = performance.memory ? `${Math.round(performance.memory.usedJSHeapSize / 1048576)}MB` : 'n/a';
+    perfPanel.textContent = [
+      `quality: ${degraded ? 'low/degraded' : quality}`,
+      `renderer: ${usingVideoFallback ? 'video' : renderer}`,
+      `frames: ${loadedFrames}/${frameCount}`,
+      `progress: ${progress.toFixed(3)}`,
+      `dpr cap: ${config.maxDevicePixelRatio}`,
+      `heap: ${memory}`,
+    ].join('\n');
   }
 
   async function init() {
+    createPerfPanel();
+
     if (isNativeScroll) {
       applyStableMobileViewport();
       desiredProgress = getNativeScrollProgress();
@@ -658,5 +759,21 @@
     }
   }
 
-  init();
+  function initWhenUseful() {
+    if (!('IntersectionObserver' in window)) {
+      init();
+      return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting || entry.intersectionRatio > 0)) {
+        observer.disconnect();
+        init();
+      }
+    }, { root: null, rootMargin: '250px', threshold: 0.01 });
+
+    observer.observe(stage);
+  }
+
+  initWhenUseful();
 })();
