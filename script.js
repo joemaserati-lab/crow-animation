@@ -29,22 +29,26 @@
 
   const config = {
     manifestPath: isNativeScroll ? 'frames-mobile-portrait/manifest.json' : 'frames/manifest.json',
-    wheelSensitivity: 0.00018,
+    wheelSensitivity: isNativeScroll ? 0.00018 : 0.000035,
+    wheelDeltaCap: 180,
     touchSensitivity: 0.00040,
-    keyboardImpulse: 0.018,
-    maxProgressStep: isNativeScroll ? 0.008 : 0.010,
+    keyboardImpulse: isNativeScroll ? 0.018 : 0.006,
+    maxProgressStep: isNativeScroll ? 0.0032 : 0.0018,
     introRatio: 0.075,
     outroRatio: 0.085,
-    baseSmoothing: isNativeScroll ? 0.12 : 0.082,
-    fastSmoothing: isNativeScroll ? 0.24 : 0.19,
+    baseSmoothing: isNativeScroll ? 0.065 : 0.045,
+    fastSmoothing: isNativeScroll ? 0.095 : 0.070,
     maxDevicePixelRatio: quality === 'high' ? 1.5 : quality === 'medium' ? 1.35 : 1,
     preloadConcurrency: quality === 'high' ? 7 : quality === 'medium' ? 5 : 3,
-    initialPreloadRatio: quality === 'high' ? 0.34 : quality === 'medium' ? 0.27 : 0.20,
-    lookAheadFrames: quality === 'high' ? 18 : quality === 'medium' ? 12 : 7,
-    backgroundBatchSize: quality === 'high' ? 6 : quality === 'medium' ? 4 : 2,
+    initialPreloadRatio: isNativeScroll ? 0.42 : quality === 'high' ? 0.34 : quality === 'medium' ? 0.27 : 0.20,
+    lookAheadFrames: isNativeScroll ? 20 : quality === 'high' ? 18 : quality === 'medium' ? 12 : 7,
+    backgroundBatchSize: isNativeScroll ? 5 : quality === 'high' ? 6 : quality === 'medium' ? 4 : 2,
     fallbackMinSeekDelta: reducedMotion ? 0.018 : 0.006,
-    friction: isNativeScroll ? 0.86 : 0.90,
-    velocityClamp: 0.07,
+    friction: isNativeScroll ? 0.84 : 0.82,
+    velocityClamp: isNativeScroll ? 0.018 : 0.006,
+    mobileScrollDistanceMultiplier: 8.5,
+    mobileTargetSmoothing: 0.035,
+    mobileMaxCatchupStep: 0.0024,
     settleThreshold: 0.00035,
     zoomAmount: quality === 'low' ? 0.07 : isNativeScroll ? 0.10 : 0.16,
     zoomExtra: quality === 'low' ? 0.0 : isNativeScroll ? 0.015 : 0.025,
@@ -91,6 +95,7 @@
   let stableViewportHeight = window.innerHeight;
   let currentViewportHeight = window.innerHeight;
   let stableMaxScroll = 0;
+  let mobileNativeProgress = 0;
   let degraded = false;
   let longFrameCount = 0;
   let lastLoopTs = 0;
@@ -161,23 +166,32 @@
     startLoop();
   }
 
-  function getMobileViewportHeight() {
+  function getMobileViewportHeight(lockToStable = true) {
     const visualHeight = window.visualViewport ? window.visualViewport.height : 0;
-    return Math.ceil(Math.max(window.innerHeight || 0, visualHeight || 0));
+    const stableHeight = lockToStable ? stableViewportHeight || 0 : 0;
+    return Math.ceil(Math.max(window.innerHeight || 0, visualHeight || 0, stableHeight));
   }
 
   function applyStableMobileViewport(resetScrollDistance = true) {
     if (!isNativeScroll) return;
-    currentViewportHeight = getMobileViewportHeight();
+    const measuredHeight = getMobileViewportHeight(!resetScrollDistance);
 
     if (resetScrollDistance || stableMaxScroll <= 0) {
       stableViewportWidth = window.innerWidth;
-      stableViewportHeight = currentViewportHeight;
-      stableMaxScroll = stableViewportHeight * 5.2;
+      stableViewportHeight = measuredHeight;
+      stableMaxScroll = stableViewportHeight * config.mobileScrollDistanceMultiplier;
+    } else if (measuredHeight > stableViewportHeight) {
+      stableViewportHeight = measuredHeight;
     }
 
-    setCssVar('--mobile-vh', `${currentViewportHeight}px`);
-    setCssVar('--mobile-scroll-height', `${stableMaxScroll + currentViewportHeight}px`);
+    currentViewportHeight = stableViewportHeight;
+
+    if (stableMaxScroll <= 0) {
+      stableMaxScroll = stableViewportHeight * config.mobileScrollDistanceMultiplier;
+    }
+
+    setCssVar('--mobile-vh', `${stableViewportHeight}px`);
+    setCssVar('--mobile-scroll-height', `${stableMaxScroll + stableViewportHeight}px`);
   }
 
   function getNativeScrollProgress() {
@@ -186,7 +200,8 @@
   }
 
   function onNativeScroll() {
-    setProgress(getNativeScrollProgress());
+    mobileNativeProgress = getNativeScrollProgress();
+    startLoop();
   }
 
   function mapToContentProgress(p) {
@@ -409,6 +424,7 @@
     if (!frame?.complete) {
       requestFrameLoad(index, true);
       requestLookAhead(index);
+      if (isNativeScroll) return;
       const nearest = findNearestLoadedFrame(index);
       if (nearest < 0) return;
       frame = frames[nearest];
@@ -459,6 +475,18 @@
   function loop(ts = performance.now()) {
     maybeDegrade(ts);
 
+    if (isNativeScroll) {
+      const nativeDelta = mobileNativeProgress - desiredProgress;
+      if (Math.abs(nativeDelta) > 0.00001) {
+        const catchup = clamp(
+          nativeDelta * config.mobileTargetSmoothing,
+          -config.mobileMaxCatchupStep,
+          config.mobileMaxCatchupStep
+        );
+        desiredProgress = clamp(desiredProgress + catchup);
+      }
+    }
+
     if (Math.abs(inputVelocity) > 0.00001) {
       desiredProgress = clamp(desiredProgress + inputVelocity);
       if ((desiredProgress === 0 && inputVelocity < 0) || (desiredProgress === 1 && inputVelocity > 0)) {
@@ -486,6 +514,7 @@
 
     const stillMoving = Math.abs(targetProgress - progress) > config.settleThreshold ||
       Math.abs(desiredProgress - targetProgress) > config.settleThreshold ||
+      (isNativeScroll && Math.abs(mobileNativeProgress - desiredProgress) > config.settleThreshold) ||
       Math.abs(inputVelocity) > 0.00001 ||
       Math.abs(targetTime - currentTime) > 0.002;
 
@@ -498,7 +527,8 @@
 
   function normalizeWheelDelta(event) {
     const modeMultiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
-    return event.deltaY * modeMultiplier;
+    const delta = event.deltaY * modeMultiplier;
+    return Math.sign(delta) * Math.min(Math.abs(delta), config.wheelDeltaCap);
   }
 
   function onWheel(event) {
@@ -586,6 +616,10 @@
         loadedFrames += 1;
         const percent = Math.round((loadedFrames / frameCount) * 100);
         if (!body.classList.contains('is-ready')) setLoader(`Caricamento frame ${percent}%`);
+        if (isNativeScroll && index === getFrameIndexForProgress(progress)) {
+          lastRenderedFrame = -1;
+          startLoop();
+        }
         return image;
       })
       .finally(() => {
@@ -690,7 +724,8 @@
         resizeRaf = requestAnimationFrame(() => {
           applyStableMobileViewport(shouldResetScrollDistance);
           resizeCanvas();
-          setProgress(getNativeScrollProgress());
+          mobileNativeProgress = getNativeScrollProgress();
+          startLoop();
         });
       };
 
@@ -743,7 +778,8 @@
 
     if (isNativeScroll) {
       applyStableMobileViewport();
-      desiredProgress = getNativeScrollProgress();
+      mobileNativeProgress = getNativeScrollProgress();
+      desiredProgress = mobileNativeProgress;
       targetProgress = desiredProgress;
       progress = desiredProgress;
     }
